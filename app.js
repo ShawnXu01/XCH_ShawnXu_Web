@@ -250,6 +250,142 @@ const WeatherManager = {
     }
 };
 
+// API配置
+const API_BASE_URL = 'http://localhost:3000/api';
+
+// 任务管理类
+class TaskManager {
+    constructor() {
+        this.tasks = [];
+    }
+
+    async loadTasks() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/tasks`);
+            this.tasks = await response.json();
+            return this.tasks;
+        } catch (error) {
+            console.error('Error loading tasks:', error);
+            return [];
+        }
+    }
+
+    async addTask(taskData) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/tasks`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(taskData)
+            });
+            const newTask = await response.json();
+            this.tasks.push(newTask);
+            return newTask;
+        } catch (error) {
+            console.error('Error adding task:', error);
+            throw error;
+        }
+    }
+
+    async updateTask(taskId, updates) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(updates)
+            });
+            const updatedTask = await response.json();
+            const index = this.tasks.findIndex(t => t._id === taskId);
+            if (index !== -1) {
+                this.tasks[index] = updatedTask;
+            }
+            return updatedTask;
+        } catch (error) {
+            console.error('Error updating task:', error);
+            throw error;
+        }
+    }
+
+    async deleteTask(taskId) {
+        try {
+            await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
+                method: 'DELETE'
+            });
+            this.tasks = this.tasks.filter(t => t._id !== taskId);
+        } catch (error) {
+            console.error('Error deleting task:', error);
+            throw error;
+        }
+    }
+
+    getTasks() {
+        return this.tasks;
+    }
+
+    getCompletedTasks() {
+        return this.tasks.filter(task => task.completed);
+    }
+}
+
+// 列表管理类
+class ListManager {
+    constructor() {
+        this.lists = [];
+    }
+
+    async loadLists() {
+        try {
+            const response = await fetch(`${API_BASE_URL}/lists`);
+            this.lists = await response.json();
+            return this.lists;
+        } catch (error) {
+            console.error('Error loading lists:', error);
+            return [];
+        }
+    }
+
+    async addList(listData) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/lists`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(listData)
+            });
+            const newList = await response.json();
+            this.lists.push(newList);
+            return newList;
+        } catch (error) {
+            console.error('Error adding list:', error);
+            throw error;
+        }
+    }
+
+    async deleteList(listId) {
+        try {
+            await fetch(`${API_BASE_URL}/lists/${listId}`, {
+                method: 'DELETE'
+            });
+            this.lists = this.lists.filter(l => l._id !== listId);
+        } catch (error) {
+            console.error('Error deleting list:', error);
+            throw error;
+        }
+    }
+
+    getCustomLists() {
+        return this.lists;
+    }
+
+    getList(listId) {
+        return this.lists.find(l => l._id === listId);
+    }
+}
+
 // 任务管理
 const TaskManager = {
     tasks: [],
