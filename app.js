@@ -255,6 +255,7 @@ const TaskManager = {
     tasks: [],
     currentList: 'all',
     selectedListForNewTask: null,
+    selectedDueDate: null,
 
     init() {
         this.loadTasks();
@@ -286,7 +287,8 @@ const TaskManager = {
             completed: false,
             important: false,
             list: this.selectedListForNewTask || 'default',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            dueDate: this.selectedDueDate || null
         };
         this.tasks.push(task);
         this.saveTasks();
@@ -312,6 +314,7 @@ const TaskManager = {
         }
         
         this.showStatusMessage('任务已添加');
+        this.selectedDueDate = null;  // 重置选择的截止时间
     },
 
     toggleTaskComplete(taskId) {
@@ -396,13 +399,6 @@ const TaskManager = {
             // 默认列表
             currentListInfo = { id: 'default', name: 'To Do', color: '#0078D4', icon: 'bi-list-ul' };
             this.renderListTasks(currentListInfo, taskList);
-        } else {
-            // 自定义列表
-            currentListInfo = listManager.lists.find(l => l.id === this.currentList);
-            if (currentListInfo) {
-                currentListInfo.icon = 'bi-list-ul';
-                this.renderListTasks(currentListInfo, taskList);
-            }
         }
     },
 
@@ -441,7 +437,28 @@ const TaskManager = {
     },
 
     renderListTasks(list, container) {
-        const listTasks = this.tasks.filter(t => t.list === list.id && !t.completed);
+        // 获取当前列表的任务并过滤未完成的任务
+        let listTasks = this.tasks.filter(t => t.list === list.id && !t.completed);
+        
+        // 对任务进行排序
+        listTasks.sort((a, b) => {
+            // 1. 首先按重要程度排序（有星号的排在前面）
+            if (a.important !== b.important) {
+                return b.important - a.important;
+            }
+            
+            // 2. 然后按截止日期排序
+            if (a.dueDate && b.dueDate) {
+                return new Date(a.dueDate) - new Date(b.dueDate);
+            }
+            
+            // 3. 如果只有一个任务有截止日期，有截止日期的排在前面
+            if (a.dueDate) return -1;
+            if (b.dueDate) return 1;
+            
+            // 4. 如果都没有截止日期，保持原有顺序
+            return 0;
+        });
         
         // 创建列表容器
         const listContainer = document.createElement('div');
@@ -457,7 +474,16 @@ const TaskManager = {
                 <i class="bi ${list.icon}" style="color: ${list.color}"></i>
                 <h3>${list.name}</h3>
             </div>
+            ${list.id !== 'default' ? '<button class="btn-delete-list"><i class="bi bi-trash"></i></button>' : ''}
         `;
+        
+        // 添加删除按钮事件监听
+        const deleteBtn = listHeader.querySelector('.btn-delete-list');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', () => {
+                this.showDeleteListConfirmation(list);
+            });
+        }
         
         // 创建任务列表区域
         const tasksContainer = document.createElement('div');
@@ -479,10 +505,19 @@ const TaskManager = {
             const taskElement = document.createElement('div');
             taskElement.className = `task-item ${task.completed ? 'completed' : ''} ${task.important ? 'important' : ''}`;
             taskElement.setAttribute('data-task-id', task.id);
+            
+            // 格式化截止时间
+            let dueDateText = '';
+            if (task.dueDate) {
+                const date = new Date(task.dueDate);
+                dueDateText = `${date.getMonth() + 1}月${date.getDate()}日`;
+            }
+            
             taskElement.innerHTML = `
                 <input type="checkbox" ${task.completed ? 'checked' : ''}>
                 <span class="task-text">${task.text}</span>
                 <div class="task-actions">
+                    ${dueDateText ? `<span class="due-date">${dueDateText}</span>` : ''}
                     <button class="btn-star ${task.important ? 'active' : ''}">
                         <i class="bi bi-star${task.important ? '-fill' : ''}"></i>
                     </button>
@@ -584,6 +619,56 @@ const TaskManager = {
         // 清空现有内容
         listSelectorContent.innerHTML = '';
         
+        // 添加列表选择器头部
+        const listSelectorHeader = document.createElement('div');
+        listSelectorHeader.className = 'list-selector-header';
+        listSelectorHeader.innerHTML = `
+            <span>添加任务</span>
+        `;
+        
+        // 添加截止时间选择器
+        const dueDateSection = document.createElement('div');
+        dueDateSection.className = 'due-date-section';
+        dueDateSection.innerHTML = `
+            <div class="section-title">截止时间</div>
+            <div class="date-inputs">
+                <div class="date-input-group">
+                    <input type="number" class="date-input year-input" placeholder="year" min="2024" max="2100">
+                </div>
+                <div class="date-input-group">
+                    <input type="number" class="date-input month-input" placeholder="month" min="1" max="12">
+                </div>
+                <div class="date-input-group">
+                    <input type="number" class="date-input day-input" placeholder="day" min="1" max="31">
+                </div>
+            </div>
+        `;
+
+        // 为日期输入框添加事件监听
+        const yearInput = dueDateSection.querySelector('.year-input');
+        const monthInput = dueDateSection.querySelector('.month-input');
+        const dayInput = dueDateSection.querySelector('.day-input');
+
+        // 更新日期时组合成完整的日期字符串
+        const updateDate = () => {
+            const year = yearInput.value;
+            const month = monthInput.value.padStart(2, '0');
+            const day = dayInput.value.padStart(2, '0');
+            if (year && month && day) {
+                this.selectedDueDate = `${year}-${month}-${day}`;
+            } else {
+                this.selectedDueDate = null;
+            }
+        };
+
+        yearInput.addEventListener('input', updateDate);
+        monthInput.addEventListener('input', updateDate);
+        dayInput.addEventListener('input', updateDate);
+        
+        // 添加列表选择区域
+        const listSection = document.createElement('div');
+        listSection.className = 'list-section';
+        
         // 添加默认列表选项
         const defaultOption = document.createElement('div');
         defaultOption.className = 'list-option';
@@ -603,7 +688,7 @@ const TaskManager = {
             }
         });
         
-        listSelectorContent.appendChild(defaultOption);
+        listSection.appendChild(defaultOption);
         
         // 添加所有自定义列表
         listManager.lists.forEach(list => {
@@ -625,8 +710,13 @@ const TaskManager = {
                 }
             });
             
-            listSelectorContent.appendChild(option);
+            listSection.appendChild(option);
         });
+        
+        // 组装所有元素
+        listSelectorContent.appendChild(listSelectorHeader);
+        listSelectorContent.appendChild(dueDateSection);
+        listSelectorContent.appendChild(listSection);
         
         popup.classList.add('active');
     },
@@ -644,6 +734,64 @@ const TaskManager = {
         setTimeout(() => {
             statusElement.classList.remove('show');
         }, 3000);
+    },
+
+    showDeleteListConfirmation(list) {
+        const modal = document.createElement('div');
+        modal.className = 'modal delete-list-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <h3>删除列表</h3>
+                <p>确定要删除"${list.name}"列表吗？列表中的所有任务将被移动到"To Do"列表中。</p>
+                <div class="modal-buttons">
+                    <button class="btn-cancel">取消</button>
+                    <button class="btn-confirm">确认删除</button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        
+        // 添加事件监听
+        modal.querySelector('.btn-cancel').addEventListener('click', () => {
+            modal.remove();
+        });
+        
+        modal.querySelector('.btn-confirm').addEventListener('click', () => {
+            this.deleteList(list);
+        });
+        
+        // 点击模态框外部关闭
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.remove();
+            }
+        });
+    },
+
+    deleteList(list) {
+        // 将列表中的所有任务移动到默认列表
+        this.tasks.forEach(task => {
+            if (task.list === list.id) {
+                task.list = 'default';
+            }
+        });
+        
+        // 从自定义列表中删除
+        listManager.lists = listManager.lists.filter(l => l.id !== list.id);
+        
+        // 保存更改
+        this.saveTasks();
+        listManager.saveLists();
+        
+        // 刷新显示
+        this.renderTasks();
+        
+        // 关闭确认模态框
+        document.querySelector('.delete-list-modal').remove();
+        
+        // 显示成功消息
+        this.showStatusMessage('列表已删除');
     }
 };
 
@@ -750,40 +898,17 @@ const listManager = {
         const customListsContainer = document.querySelector('.custom-lists');
         customListsContainer.innerHTML = '';
         
-        this.lists.forEach(list => {
-            const listItem = document.createElement('li');
-            listItem.className = 'nav-item';
-            listItem.setAttribute('data-list-id', list.id);
-            if (TaskManager.currentList === list.id) {
-                listItem.classList.add('active');
+        // 不再渲染导航栏中的自定义列表，但保留列表管理功能
+        // 如果当前选中的是自定义列表，切换到默认列表
+        if (this.lists.some(list => list.id === TaskManager.currentList)) {
+            TaskManager.currentList = 'default';
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            const defaultItem = document.querySelector('.nav-item[data-list="default"]');
+            if (defaultItem) {
+                defaultItem.classList.add('active');
             }
-            
-            listItem.innerHTML = `
-                <div class="list-content">
-                    <i class="bi bi-list-ul" style="color: ${list.color}"></i>
-                    <span>${list.name}</span>
-                </div>
-                <button class="btn-delete-list" data-list-id="${list.id}">
-                    <i class="bi bi-trash"></i>
-                </button>
-            `;
-            
-            // 为整个列表项添加点击事件
-            listItem.addEventListener('click', (e) => {
-                // 如果点击的是删除按钮，不触发列表选择
-                if (!e.target.closest('.btn-delete-list')) {
-                    this.selectList(list.id);
-                }
-            });
-            
-            // 为删除按钮添加点击事件
-            listItem.querySelector('.btn-delete-list').addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.showDeleteConfirmation(list);
-            });
-            
-            customListsContainer.appendChild(listItem);
-        });
+            TaskManager.renderTasks();
+        }
     },
 
     selectList(listId) {
