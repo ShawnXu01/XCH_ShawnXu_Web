@@ -1,5 +1,5 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const dotenv = require('dotenv');
 
@@ -12,115 +12,155 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 连接MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/pico-pal', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-})
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.error('MongoDB connection error:', err));
-
-// 定义任务模型
-const TaskSchema = new mongoose.Schema({
-    text: { type: String, required: true },
-    completed: { type: Boolean, default: false },
-    important: { type: Boolean, default: false },
-    listId: { type: String, default: 'default' },
-    dueDate: { type: String },
-    createdAt: { type: Date, default: Date.now }
+// 创建数据库连接
+const db = new sqlite3.Database('pico-pal.db', (err) => {
+    if (err) {
+        console.error('Error connecting to database:', err);
+    } else {
+        console.log('Connected to SQLite database');
+        initDatabase();
+    }
 });
 
-const Task = mongoose.model('Task', TaskSchema);
+// 初始化数据库表
+function initDatabase() {
+    db.serialize(() => {
+        // 创建任务表
+        db.run(`CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            text TEXT NOT NULL,
+            completed BOOLEAN DEFAULT 0,
+            important BOOLEAN DEFAULT 0,
+            listId TEXT DEFAULT 'default',
+            dueDate TEXT,
+            createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
 
-// 定义列表模型
-const ListSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    color: { type: String, required: true },
-    createdAt: { type: Date, default: Date.now }
-});
-
-const List = mongoose.model('List', ListSchema);
+        // 创建列表表
+        db.run(`CREATE TABLE IF NOT EXISTS lists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+    });
+}
 
 // API路由
-// 获取所有任务
-app.get('/api/tasks', async (req, res) => {
-    try {
-        const tasks = await Task.find().sort({ createdAt: -1 });
-        res.json(tasks);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+// 任务相关路由
+app.get('/api/tasks', (req, res) => {
+    db.all('SELECT * FROM tasks ORDER BY createdAt DESC', [], (err, rows) => {
+        if (err) {
+            res.status(500).json({ message: err.message });
+            return;
+        }
+        res.json(rows);
+    });
 });
 
-// 创建新任务
-app.post('/api/tasks', async (req, res) => {
-    try {
-        const task = new Task(req.body);
-        const newTask = await task.save();
-        res.status(201).json(newTask);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
+app.post('/api/tasks', (req, res) => {
+    const { text, completed, important, listId, dueDate } = req.body;
+    db.run(
+        'INSERT INTO tasks (text, completed, important, listId, dueDate) VALUES (?, ?, ?, ?, ?)',
+        [text, completed || false, important || false, listId || 'default', dueDate],
+        function(err) {
+            if (err) {
+                res.status(400).json({ message: err.message });
+                return;
+            }
+            db.get('SELECT * FROM tasks WHERE id = ?', [this.lastID], (err, row) => {
+                if (err) {
+                    res.status(500).json({ message: err.message });
+                    return;
+                }
+                res.status(201).json(row);
+            });
+        }
+    );
 });
 
-// 更新任务
-app.put('/api/tasks/:id', async (req, res) => {
-    try {
-        const task = await Task.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true }
-        );
-        res.json(task);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
+app.put('/api/tasks/:id', (req, res) => {
+    const { text, completed, important, listId, dueDate } = req.body;
+    db.run(
+        'UPDATE tasks SET text = ?, completed = ?, important = ?, listId = ?, dueDate = ? WHERE id = ?',
+        [text, completed, important, listId, dueDate, req.params.id],
+        function(err) {
+            if (err) {
+                res.status(400).json({ message: err.message });
+                return;
+            }
+            db.get('SELECT * FROM tasks WHERE id = ?', [req.params.id], (err, row) => {
+                if (err) {
+                    res.status(500).json({ message: err.message });
+                    return;
+                }
+                res.json(row);
+            });
+        }
+    );
 });
 
-// 删除任务
-app.delete('/api/tasks/:id', async (req, res) => {
-    try {
-        await Task.findByIdAndDelete(req.params.id);
-        res.json({ message: 'Task deleted' });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+app.delete('/api/tasks/:id', (req, res) => {
+    db.run('DELETE FROM tasks WHERE id = ?', [req.params.id], function(err) {
+        if (err) {
+            res.status(400).json({ message: err.message });
+            return;
+        }
+        res.status(204).send();
+    });
 });
 
-// 获取所有列表
-app.get('/api/lists', async (req, res) => {
-    try {
-        const lists = await List.find().sort({ createdAt: -1 });
-        res.json(lists);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+// 列表相关路由
+app.get('/api/lists', (req, res) => {
+    db.all('SELECT * FROM lists ORDER BY createdAt DESC', [], (err, rows) => {
+        if (err) {
+            res.status(500).json({ message: err.message });
+            return;
+        }
+        res.json(rows);
+    });
 });
 
-// 创建新列表
-app.post('/api/lists', async (req, res) => {
-    try {
-        const list = new List(req.body);
-        const newList = await list.save();
-        res.status(201).json(newList);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
+app.post('/api/lists', (req, res) => {
+    const { name, color } = req.body;
+    db.run(
+        'INSERT INTO lists (name, color) VALUES (?, ?)',
+        [name, color],
+        function(err) {
+            if (err) {
+                res.status(400).json({ message: err.message });
+                return;
+            }
+            db.get('SELECT * FROM lists WHERE id = ?', [this.lastID], (err, row) => {
+                if (err) {
+                    res.status(500).json({ message: err.message });
+                    return;
+                }
+                res.status(201).json(row);
+            });
+        }
+    );
 });
 
-// 删除列表
-app.delete('/api/lists/:id', async (req, res) => {
-    try {
-        await List.findByIdAndDelete(req.params.id);
-        // 将列表中的任务移动到默认列表
-        await Task.updateMany(
-            { listId: req.params.id },
-            { listId: 'default' }
-        );
-        res.json({ message: 'List deleted' });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
+app.delete('/api/lists/:id', (req, res) => {
+    // 开始事务
+    db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+
+        // 将属于该列表的任务移动到默认列表
+        db.run('UPDATE tasks SET listId = ? WHERE listId = ?', ['default', req.params.id]);
+
+        // 删除列表
+        db.run('DELETE FROM lists WHERE id = ?', [req.params.id], function(err) {
+            if (err) {
+                db.run('ROLLBACK');
+                res.status(400).json({ message: err.message });
+                return;
+            }
+            db.run('COMMIT');
+            res.status(204).send();
+        });
+    });
 });
 
 // 启动服务器
