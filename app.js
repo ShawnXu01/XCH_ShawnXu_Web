@@ -1,3 +1,6 @@
+// API配置
+const API_BASE_URL = 'http://10.106.208.46/api';
+
 // 主题管理
 const ThemeManager = {
     init() {
@@ -250,9 +253,12 @@ const WeatherManager = {
     }
 };
 
+<<<<<<< HEAD
 // API配置
 const API_BASE_URL = 'http://10.106.208.46:3000/api'; 
 
+=======
+>>>>>>> bdca2fc (api address chaneged)
 // 任务管理类
 class TaskManager {
     constructor() {
