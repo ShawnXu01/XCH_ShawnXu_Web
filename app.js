@@ -250,194 +250,334 @@ const WeatherManager = {
     }
 };
 
-// API配置
-const API_BASE_URL = 'http://10.106.208.46/api';
+// 数据同步管理
+const SyncManager = {
+    API_BASE_URL: 'http://10.106.208.46/api',
+    syncQueue: [],
+    isSyncing: false,
 
-// 任务管理类
-class TaskManager {
-    constructor() {
-        this.tasks = [];
-        this.currentList = 'all';
-        this.selectedListForNewTask = null;
-        this.selectedDueDate = null;
+    init() {
+        // 从本地存储加载同步队列
+        const savedQueue = localStorage.getItem('syncQueue');
+        if (savedQueue) {
+            this.syncQueue = JSON.parse(savedQueue);
+        }
+        
+        // 定期尝试同步
+        setInterval(() => this.processSyncQueue(), 5000);
+    },
+
+    // 添加同步任务到队列
+    addToSyncQueue(operation) {
+        this.syncQueue.push({
+            ...operation,
+            timestamp: Date.now(),
+            retryCount: 0
+        });
+        this.saveSyncQueue();
+    },
+
+    // 保存同步队列到本地存储
+    saveSyncQueue() {
+        localStorage.setItem('syncQueue', JSON.stringify(this.syncQueue));
+    },
+
+    // 处理同步队列
+    async processSyncQueue() {
+        if (this.isSyncing || this.syncQueue.length === 0) return;
+        
+        this.isSyncing = true;
+        const operation = this.syncQueue[0];
+        
+        try {
+            await this.syncOperation(operation);
+            // 同步成功，从队列中移除
+            this.syncQueue.shift();
+            this.saveSyncQueue();
+        } catch (error) {
+            console.error('同步失败:', error);
+            // 增加重试次数
+            operation.retryCount++;
+            if (operation.retryCount >= 3) {
+                // 重试次数过多，从队列中移除
+                this.syncQueue.shift();
+            }
+            this.saveSyncQueue();
+        } finally {
+            this.isSyncing = false;
+        }
+    },
+
+    // 执行同步操作
+    async syncOperation(operation) {
+        const { type, data } = operation;
+        
+        switch (type) {
+            case 'addTask':
+                await this.syncAddTask(data);
+                break;
+            case 'updateTask':
+                await this.syncUpdateTask(data);
+                break;
+            case 'deleteTask':
+                await this.syncDeleteTask(data);
+                break;
+            case 'addList':
+                await this.syncAddList(data);
+                break;
+            case 'updateList':
+                await this.syncUpdateList(data);
+                break;
+            case 'deleteList':
+                await this.syncDeleteList(data);
+                break;
+        }
+    },
+
+    // 同步添加任务
+    async syncAddTask(task) {
+        const response = await fetch(`${this.API_BASE_URL}/tasks`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(task)
+        });
+        
+        if (!response.ok) {
+            throw new Error('添加任务同步失败');
+        }
+    },
+
+    // 同步更新任务
+    async syncUpdateTask(task) {
+        const response = await fetch(`${this.API_BASE_URL}/tasks/${task.id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(task)
+        });
+        
+        if (!response.ok) {
+            throw new Error('更新任务同步失败');
+        }
+    },
+
+    // 同步删除任务
+    async syncDeleteTask(taskId) {
+        const response = await fetch(`${this.API_BASE_URL}/tasks/${taskId}`, {
+            method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+            throw new Error('删除任务同步失败');
+        }
+    },
+
+    // 同步添加列表
+    async syncAddList(list) {
+        const response = await fetch(`${this.API_BASE_URL}/lists`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(list)
+        });
+        
+        if (!response.ok) {
+            throw new Error('添加列表同步失败');
+        }
+    },
+
+    // 同步更新列表
+    async syncUpdateList(list) {
+        const response = await fetch(`${this.API_BASE_URL}/lists/${list.id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(list)
+        });
+        
+        if (!response.ok) {
+            throw new Error('更新列表同步失败');
+        }
+    },
+
+    // 同步删除列表
+    async syncDeleteList(listId) {
+        const response = await fetch(`${this.API_BASE_URL}/lists/${listId}`, {
+            method: 'DELETE'
+        });
+        
+        if (!response.ok) {
+            throw new Error('删除列表同步失败');
+        }
     }
+};
 
-    async init() {
-        await this.loadTasks();
+// 任务管理
+const TaskManager = {
+    tasks: [],
+    currentList: 'all',
+    selectedListForNewTask: null,
+    selectedDueDate: null,
+
+    init() {
+        this.loadTasks();
         this.setupEventListeners();
+        // 确保导航栏状态正确
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.classList.remove('active');
+            if (item.getAttribute('data-list') === 'all') {
+                item.classList.add('active');
+            }
+        });
+        this.currentList = 'all';
         this.renderTasks();
-    }
+    },
 
-    async loadTasks() {
-        try {
-            const response = await fetch(`${API_BASE_URL}/tasks`);
-            this.tasks = await response.json();
-            return this.tasks;
-        } catch (error) {
-            console.error('Error loading tasks:', error);
-            return [];
-        }
-    }
+    loadTasks() {
+        const savedTasks = localStorage.getItem('tasks');
+        this.tasks = savedTasks ? JSON.parse(savedTasks) : [];
+    },
 
-    async addTask(text) {
-        try {
-            const taskData = {
-                text,
-                completed: false,
-                important: false,
-                listId: this.selectedListForNewTask || 'default',
-                dueDate: this.selectedDueDate || null,
-                createdAt: new Date().toISOString()
-            };
+    saveTasks() {
+        localStorage.setItem('tasks', JSON.stringify(this.tasks));
+    },
 
-            const response = await fetch(`${API_BASE_URL}/tasks`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(taskData)
-            });
-            const newTask = await response.json();
-            this.tasks.push(newTask);
-            
-            // 如果在已完成列表视图中，则刷新整个任务列表
-            if (this.currentList === 'completed') {
-                this.renderTasks();
-            } else {
-                // 找到对应的列表容器
-                const listContainer = document.querySelector(`.list-tasks-container[data-list-id="${newTask.listId}"]`);
-                if (listContainer) {
-                    const tasksContainer = listContainer.querySelector('.list-tasks');
-                    // 如果是空列表，清除空状态显示
-                    if (tasksContainer.querySelector('.empty-list')) {
-                        tasksContainer.innerHTML = '';
-                    }
-                    // 创建并添加新任务元素
-                    this.renderTaskList([newTask], tasksContainer);
-                } else {
-                    // 如果找不到对应的容器，刷新整个任务列表
-                    this.renderTasks();
-                }
-            }
-            
-            this.showStatusMessage('任务已添加');
-            this.selectedDueDate = null;  // 重置选择的截止时间
-            return newTask;
-        } catch (error) {
-            console.error('Error adding task:', error);
-            throw error;
-        }
-    }
-
-    async updateTask(taskId, updates) {
-        try {
-            const response = await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(updates)
-            });
-            const updatedTask = await response.json();
-            const index = this.tasks.findIndex(t => t._id === taskId);
-            if (index !== -1) {
-                this.tasks[index] = updatedTask;
-            }
-            return updatedTask;
-        } catch (error) {
-            console.error('Error updating task:', error);
-            throw error;
-        }
-    }
-
-    async deleteTask(taskId) {
-        try {
-            await fetch(`${API_BASE_URL}/tasks/${taskId}`, {
-                method: 'DELETE'
-            });
-            this.tasks = this.tasks.filter(t => t._id !== taskId);
-        } catch (error) {
-            console.error('Error deleting task:', error);
-            throw error;
-        }
-    }
-
-    getTasks() {
-        return this.tasks;
-    }
-
-    getCompletedTasks() {
-        return this.tasks.filter(task => task.completed);
-    }
-
-    setupEventListeners() {
-        // 添加任务
-        const taskInput = document.getElementById('taskInput');
-        const addTaskBtn = document.getElementById('addTaskBtn');
-
-        addTaskBtn.addEventListener('click', () => {
-            const text = taskInput.value.trim();
-            if (text) {
-                this.addTask(text);
-                taskInput.value = '';
-            }
+    addTask(text) {
+        const task = {
+            id: Date.now(),
+            text,
+            completed: false,
+            important: false,
+            list: this.selectedListForNewTask || 'default',
+            createdAt: new Date().toISOString(),
+            dueDate: this.selectedDueDate || null
+        };
+        this.tasks.push(task);
+        this.saveTasks();
+        
+        // 添加到同步队列
+        SyncManager.addToSyncQueue({
+            type: 'addTask',
+            data: task
         });
-
-        taskInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const text = taskInput.value.trim();
-                if (text) {
-                    this.addTask(text);
-                    taskInput.value = '';
-                }
-            }
-        });
-
-        // 新建列表
-        const newListBtn = document.getElementById('newListBtn');
-        const newListModal = document.getElementById('newListModal');
-        const cancelNewList = document.getElementById('cancelNewList');
-        const confirmNewList = document.getElementById('confirmNewList');
-        const listNameInput = document.getElementById('listNameInput');
-        const colorOptions = document.querySelectorAll('.color-option');
-
-        newListBtn.addEventListener('click', () => {
-            newListModal.classList.add('active');
-        });
-
-        cancelNewList.addEventListener('click', () => {
-            newListModal.classList.remove('active');
-            listNameInput.value = '';
-            colorOptions.forEach(option => option.classList.remove('selected'));
-        });
-
-        colorOptions.forEach(option => {
-            option.style.backgroundColor = option.dataset.color;
-            option.addEventListener('click', () => {
-                colorOptions.forEach(opt => opt.classList.remove('selected'));
-                option.classList.add('selected');
-            });
-        });
-
-        confirmNewList.addEventListener('click', () => {
-            const name = listNameInput.value.trim();
-            const selectedColor = document.querySelector('.color-option.selected')?.dataset.color;
-            
-            if (name && selectedColor) {
-                this.createNewList(name, selectedColor);
-                newListModal.classList.remove('active');
-                listNameInput.value = '';
-                colorOptions.forEach(option => option.classList.remove('selected'));
-            }
-        });
-
-        // 已完成任务
-        const completedBtn = document.getElementById('completedBtn');
-        completedBtn.addEventListener('click', () => {
-            this.currentList = this.currentList === 'completed' ? 'all' : 'completed';
+        
+        // 如果在已完成列表视图中，则刷新整个任务列表
+        if (this.currentList === 'completed') {
             this.renderTasks();
-        });
-    }
+        } else {
+            // 找到对应的列表容器
+            const listContainer = document.querySelector(`.list-tasks-container[data-list-id="${task.list}"]`);
+            if (listContainer) {
+                const tasksContainer = listContainer.querySelector('.list-tasks');
+                // 如果是空列表，清除空状态显示
+                if (tasksContainer.querySelector('.empty-list')) {
+                    tasksContainer.innerHTML = '';
+                }
+                // 创建并添加新任务元素
+                this.renderTaskList([task], tasksContainer);
+            } else {
+                // 如果找不到对应的容器，刷新整个任务列表
+                this.renderTasks();
+            }
+        }
+        
+        this.showStatusMessage('任务已添加');
+        this.selectedDueDate = null;  // 重置选择的截止时间
+    },
+
+    toggleTaskComplete(taskId) {
+        const task = this.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.completed = !task.completed;
+            this.saveTasks();
+            
+            // 添加到同步队列
+            SyncManager.addToSyncQueue({
+                type: 'updateTask',
+                data: task
+            });
+            
+            this.renderTasks();
+            this.showStatusMessage(task.completed ? '任务已完成' : '任务已恢复');
+        }
+    },
+
+    toggleTaskImportant(taskId) {
+        const task = this.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.important = !task.important;
+            this.saveTasks();
+            
+            // 添加到同步队列
+            SyncManager.addToSyncQueue({
+                type: 'updateTask',
+                data: task
+            });
+            
+            this.renderTasks();
+            this.showStatusMessage(task.important ? '已标记为重要' : '已取消重要标记');
+        }
+    },
+
+    deleteTask(taskId) {
+        const index = this.tasks.findIndex(t => t.id === taskId);
+        if (index !== -1) {
+            this.tasks.splice(index, 1);
+            this.saveTasks();
+            
+            // 添加到同步队列
+            SyncManager.addToSyncQueue({
+                type: 'deleteTask',
+                data: taskId
+            });
+            
+            this.renderTasks();
+            this.showStatusMessage('任务已删除');
+        }
+    },
+
+    editTask(taskId, newText) {
+        const task = this.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.text = newText;
+            this.saveTasks();
+            
+            // 添加到同步队列
+            SyncManager.addToSyncQueue({
+                type: 'updateTask',
+                data: task
+            });
+            
+            this.renderTasks();
+            this.showStatusMessage('任务已更新');
+        }
+    },
+
+    filterTasks() {
+        let filteredTasks = this.tasks;
+        
+        switch (this.currentList) {
+            case 'completed':
+                filteredTasks = this.tasks.filter(t => t.completed);
+                break;
+            case 'all':
+                filteredTasks = this.tasks.filter(t => !t.completed);
+                break;
+            case 'default':
+                filteredTasks = this.tasks.filter(t => t.list === 'default' && !t.completed);
+                break;
+            default:
+                filteredTasks = this.tasks.filter(t => t.list === this.currentList && !t.completed);
+                break;
+        }
+
+        return filteredTasks;
+    },
 
     renderTasks() {
         const taskList = document.getElementById('taskList');
@@ -461,7 +601,7 @@ class TaskManager {
             currentListInfo = { id: 'default', name: 'To Do', color: '#0078D4', icon: 'bi-list-ul' };
             this.renderListTasks(currentListInfo, taskList);
         }
-    }
+    },
 
     renderCompletedTasks(container) {
         const completedTasks = this.tasks.filter(t => t.completed);
@@ -495,7 +635,7 @@ class TaskManager {
         listContainer.appendChild(listHeader);
         listContainer.appendChild(tasksContainer);
         container.appendChild(listContainer);
-    }
+    },
 
     renderListTasks(list, container) {
         // 获取当前列表的任务并过滤未完成的任务
@@ -559,7 +699,7 @@ class TaskManager {
         listContainer.appendChild(listHeader);
         listContainer.appendChild(tasksContainer);
         container.appendChild(listContainer);
-    }
+    },
 
     renderTaskList(tasks, container) {
         tasks.forEach(task => {
@@ -624,58 +764,168 @@ class TaskManager {
 
             container.appendChild(taskElement);
         });
-    }
+    },
 
-    toggleTaskComplete(taskId) {
-        const task = this.tasks.find(t => t.id === taskId);
-        if (task) {
-            task.completed = !task.completed;
-            this.saveTasks();
-            this.renderTasks();
-            this.showStatusMessage(task.completed ? '任务已完成' : '任务已恢复');
-        }
-    }
+    setupEventListeners() {
+        // 添加任务的输入框监听
+        const taskInput = document.querySelector('.task-input input');
+        const listSelectorPopup = document.querySelector('.list-selector-popup');
+        const closeSelector = document.querySelector('.close-selector');
 
-    toggleTaskImportant(taskId) {
-        const task = this.tasks.find(t => t.id === taskId);
-        if (task) {
-            task.important = !task.important;
-            this.saveTasks();
-            this.renderTasks();
-            this.showStatusMessage(task.important ? '已标记为重要' : '已取消重要标记');
-        }
-    }
+        taskInput.addEventListener('focus', () => {
+            this.showListSelector();
+        });
 
-    editTask(taskId, newText) {
-        const task = this.tasks.find(t => t.id === taskId);
-        if (task) {
-            task.text = newText;
-            this.saveTasks();
-            this.renderTasks();
-            this.showStatusMessage('任务已更新');
-        }
-    }
+        closeSelector.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.hideListSelector();
+        });
 
-    filterTasks() {
-        let filteredTasks = this.tasks;
+        // 点击外部关闭列表选择器
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.task-input')) {
+                this.hideListSelector();
+            }
+        });
+
+        taskInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && taskInput.value.trim()) {
+                this.selectedListForNewTask = 'default';  // 设置为默认列表
+                this.addTask(taskInput.value.trim());
+                taskInput.value = '';
+                this.hideListSelector();
+                this.selectedListForNewTask = null;
+            }
+        });
+
+        // 导航项点击监听
+        document.querySelectorAll('.nav-item').forEach(item => {
+            const listId = item.getAttribute('data-list');
+            if (listId) {  // 只为有data-list属性的导航项添加点击事件
+                item.addEventListener('click', () => {
+                    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                    item.classList.add('active');
+                    this.currentList = listId;
+                    this.renderTasks();
+                });
+            }
+        });
+    },
+
+    showListSelector() {
+        const listSelectorContent = document.querySelector('.list-selector-content');
+        const popup = document.querySelector('.list-selector-popup');
+        const taskInput = document.querySelector('.task-input input');
         
-        switch (this.currentList) {
-            case 'completed':
-                filteredTasks = this.tasks.filter(t => t.completed);
-                break;
-            case 'all':
-                filteredTasks = this.tasks.filter(t => !t.completed);
-                break;
-            case 'default':
-                filteredTasks = this.tasks.filter(t => t.list === 'default' && !t.completed);
-                break;
-            default:
-                filteredTasks = this.tasks.filter(t => t.list === this.currentList && !t.completed);
-                break;
-        }
+        // 清空现有内容
+        listSelectorContent.innerHTML = '';
+        
+        // 添加列表选择器头部
+        const listSelectorHeader = document.createElement('div');
+        listSelectorHeader.className = 'list-selector-header';
+        listSelectorHeader.innerHTML = `
+            <span>添加任务</span>
+        `;
+        
+        // 添加截止时间选择器
+        const dueDateSection = document.createElement('div');
+        dueDateSection.className = 'due-date-section';
+        dueDateSection.innerHTML = `
+            <div class="section-title">截止时间</div>
+            <div class="date-inputs">
+                <div class="date-input-group">
+                    <input type="number" class="date-input year-input" placeholder="year" min="2024" max="2100">
+                </div>
+                <div class="date-input-group">
+                    <input type="number" class="date-input month-input" placeholder="month" min="1" max="12">
+                </div>
+                <div class="date-input-group">
+                    <input type="number" class="date-input day-input" placeholder="day" min="1" max="31">
+                </div>
+            </div>
+        `;
 
-        return filteredTasks;
-    }
+        // 为日期输入框添加事件监听
+        const yearInput = dueDateSection.querySelector('.year-input');
+        const monthInput = dueDateSection.querySelector('.month-input');
+        const dayInput = dueDateSection.querySelector('.day-input');
+
+        // 更新日期时组合成完整的日期字符串
+        const updateDate = () => {
+            const year = yearInput.value;
+            const month = monthInput.value.padStart(2, '0');
+            const day = dayInput.value.padStart(2, '0');
+            if (year && month && day) {
+                this.selectedDueDate = `${year}-${month}-${day}`;
+            } else {
+                this.selectedDueDate = null;
+            }
+        };
+
+        yearInput.addEventListener('input', updateDate);
+        monthInput.addEventListener('input', updateDate);
+        dayInput.addEventListener('input', updateDate);
+        
+        // 添加列表选择区域
+        const listSection = document.createElement('div');
+        listSection.className = 'list-section';
+        
+        // 添加默认列表选项
+        const defaultOption = document.createElement('div');
+        defaultOption.className = 'list-option';
+        defaultOption.innerHTML = `
+            <div class="list-icon" style="background-color: #0078D4"></div>
+            <span class="list-name">To Do</span>
+        `;
+        
+        defaultOption.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (taskInput.value.trim()) {
+                this.selectedListForNewTask = 'default';
+                this.addTask(taskInput.value.trim());
+                taskInput.value = '';
+                this.hideListSelector();
+                this.selectedListForNewTask = null;
+            }
+        });
+        
+        listSection.appendChild(defaultOption);
+        
+        // 添加所有自定义列表
+        listManager.lists.forEach(list => {
+            const option = document.createElement('div');
+            option.className = 'list-option';
+            option.innerHTML = `
+                <div class="list-icon" style="background-color: ${list.color}"></div>
+                <span class="list-name">${list.name}</span>
+            `;
+            
+            option.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (taskInput.value.trim()) {
+                    this.selectedListForNewTask = list.id;
+                    this.addTask(taskInput.value.trim());
+                    taskInput.value = '';
+                    this.hideListSelector();
+                    this.selectedListForNewTask = null;
+                }
+            });
+            
+            listSection.appendChild(option);
+        });
+        
+        // 组装所有元素
+        listSelectorContent.appendChild(listSelectorHeader);
+        listSelectorContent.appendChild(dueDateSection);
+        listSelectorContent.appendChild(listSection);
+        
+        popup.classList.add('active');
+    },
+
+    hideListSelector() {
+        const popup = document.querySelector('.list-selector-popup');
+        popup.classList.remove('active');
+    },
 
     showStatusMessage(message) {
         const statusElement = document.getElementById('statusMessage');
@@ -685,7 +935,7 @@ class TaskManager {
         setTimeout(() => {
             statusElement.classList.remove('show');
         }, 3000);
-    }
+    },
 
     showDeleteListConfirmation(list) {
         const modal = document.createElement('div');
@@ -718,7 +968,7 @@ class TaskManager {
                 modal.remove();
             }
         });
-    }
+    },
 
     deleteList(list) {
         // 将列表中的所有任务移动到默认列表
@@ -744,100 +994,187 @@ class TaskManager {
         // 显示成功消息
         this.showStatusMessage('列表已删除');
     }
+};
 
-    saveTasks() {
-        localStorage.setItem('tasks', JSON.stringify(this.tasks));
-    }
+// 列表管理
+const listManager = {
+    lists: [],
+    selectedColor: null,
 
-    createNewList(name, color) {
-        // Implementation needed
-    }
-}
-
-// 列表管理类
-class ListManager {
-    constructor() {
-        this.lists = [];
-        this.selectedColor = null;
-    }
-
-    async init() {
-        await this.loadLists();
-        this.initNewListModal();
-        this.initDeleteListModal();
-    }
-
-    async loadLists() {
-        try {
-            const response = await fetch(`${API_BASE_URL}/lists`);
-            this.lists = await response.json();
-            return this.lists;
-        } catch (error) {
-            console.error('Error loading lists:', error);
-            return [];
-        }
-    }
-
-    async addList(name, color) {
-        try {
-            const listData = { name, color };
-            const response = await fetch(`${API_BASE_URL}/lists`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(listData)
-            });
-            const newList = await response.json();
-            this.lists.push(newList);
+    init() {
+        // 从localStorage加载列表
+        const savedLists = localStorage.getItem('customLists');
+        if (savedLists) {
+            this.lists = JSON.parse(savedLists);
             this.renderLists();
-            return newList;
-        } catch (error) {
-            console.error('Error adding list:', error);
-            throw error;
         }
-    }
+
+        // 初始化新建列表功能
+        this.initNewListModal();
+        
+        // 初始化删除列表功能
+        this.initDeleteListModal();
+    },
 
     initNewListModal() {
-        // Implementation needed
-    }
+        const newListBtn = document.querySelector('.btn-new-list');
+        const modal = document.getElementById('newListModal');
+        const closeBtn = document.getElementById('closeModal');
+        const cancelBtn = document.getElementById('cancelNewList');
+        const form = document.getElementById('newListForm');
+        const colorOptions = document.getElementById('colorOptions');
+
+        // 打开模态框
+        newListBtn.addEventListener('click', () => {
+            modal.classList.add('active');
+        });
+
+        // 关闭模态框
+        const closeModal = () => {
+            modal.classList.remove('active');
+            form.reset();
+            this.selectedColor = null;
+            document.querySelectorAll('.color-option').forEach(option => {
+                option.classList.remove('selected');
+            });
+        };
+
+        closeBtn.addEventListener('click', closeModal);
+        cancelBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+
+        // 颜色选择
+        colorOptions.addEventListener('click', (e) => {
+            const colorOption = e.target.closest('.color-option');
+            if (!colorOption) return;
+
+            document.querySelectorAll('.color-option').forEach(option => {
+                option.classList.remove('selected');
+            });
+            colorOption.classList.add('selected');
+            this.selectedColor = colorOption.dataset.color;
+        });
+
+        // 表单提交
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const listName = document.getElementById('listName').value.trim();
+            
+            if (!listName || !this.selectedColor) {
+                alert('请输入列表名称并选择颜色！');
+                return;
+            }
+
+            this.createNewList(listName, this.selectedColor);
+            closeModal();
+        });
+    },
 
     initDeleteListModal() {
-        // Implementation needed
-    }
+        const deleteListModal = document.getElementById('deleteListModal');
+        const closeDeleteModal = document.getElementById('closeDeleteModal');
+        const cancelDelete = document.getElementById('cancelDelete');
+        const confirmDelete = document.getElementById('confirmDelete');
+        
+        closeDeleteModal.addEventListener('click', () => this.hideDeleteConfirmation());
+        cancelDelete.addEventListener('click', () => this.hideDeleteConfirmation());
+        confirmDelete.addEventListener('click', () => this.deleteList());
+    },
+
+    createNewList(name, color) {
+        const newList = {
+            id: Date.now().toString(),
+            name,
+            color
+        };
+
+        this.lists.push(newList);
+        this.saveLists();
+        
+        // 添加到同步队列
+        SyncManager.addToSyncQueue({
+            type: 'addList',
+            data: newList
+        });
+        
+        this.renderLists();
+    },
 
     renderLists() {
-        // Implementation needed
-    }
+        const customListsContainer = document.querySelector('.custom-lists');
+        customListsContainer.innerHTML = '';
+        
+        // 不再渲染导航栏中的自定义列表，但保留列表管理功能
+        // 如果当前选中的是自定义列表，切换到默认列表
+        if (this.lists.some(list => list.id === TaskManager.currentList)) {
+            TaskManager.currentList = 'default';
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            const defaultItem = document.querySelector('.nav-item[data-list="default"]');
+            if (defaultItem) {
+                defaultItem.classList.add('active');
+            }
+            TaskManager.renderTasks();
+        }
+    },
 
     selectList(listId) {
-        // Implementation needed
-    }
+        TaskManager.currentList = listId;
+        document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+        const listItem = document.querySelector(`.nav-item[data-list-id="${listId}"]`);
+        if (listItem) {
+            listItem.classList.add('active');
+        }
+        TaskManager.renderTasks();
+    },
 
     showDeleteConfirmation(list) {
-        // Implementation needed
-    }
+        this.currentListToDelete = list;
+        document.getElementById('deleteListModal').classList.add('active');
+    },
 
     hideDeleteConfirmation() {
-        // Implementation needed
-    }
+        document.getElementById('deleteListModal').classList.remove('active');
+        this.currentListToDelete = null;
+    },
 
     deleteList() {
-        // Implementation needed
-    }
+        if (!this.currentListToDelete) return;
+        
+        const listToDelete = this.currentListToDelete;
+        this.lists = this.lists.filter(list => list.id !== listToDelete.id);
+        this.saveLists();
+        
+        // 添加到同步队列
+        SyncManager.addToSyncQueue({
+            type: 'deleteList',
+            data: listToDelete.id
+        });
+        
+        // 如果删除的是当前选中的列表，切换到默认列表
+        if (TaskManager.currentList === listToDelete.id) {
+            TaskManager.currentList = 'default';
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            document.querySelector('.nav-item:first-child').classList.add('active');
+        }
+        
+        this.renderLists();
+        this.hideDeleteConfirmation();
+        TaskManager.renderTasks();
+    },
 
     saveLists() {
         localStorage.setItem('customLists', JSON.stringify(this.lists));
     }
-}
+};
 
 // 初始化应用
 document.addEventListener('DOMContentLoaded', () => {
-    // 创建实例
-    window.taskManager = new TaskManager();
-    window.listManager = new ListManager();
-    
-    // 初始化
-    window.taskManager.init();
-    window.listManager.init();
+    ThemeManager.init();
+    TimeManager.init();
+    WeatherManager.init();
+    SyncManager.init();
+    listManager.init();
+    TaskManager.init();
 }); 
