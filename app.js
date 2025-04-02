@@ -251,7 +251,7 @@ const WeatherManager = {
 };
 
 // API配置
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'http://10.106.208.46:3000/api'; 
 
 // 任务管理类
 class TaskManager {
